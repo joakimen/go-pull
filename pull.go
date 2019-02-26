@@ -1,68 +1,79 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/ioutil"
-	"kajito/git"
-	"os"
+	"log"
 	"path/filepath"
 	"sync"
+
+	"github.com/krystah/git"
+	"github.com/pkg/errors"
 )
 
 func main() {
 
-	root, ok := os.LookupEnv("REPO")
+	fRoot := flag.String("root", "", "Base directory containing the repositories")
+	flag.Parse()
+	root := *fRoot
 
-	// test if $REPO is set
-	if !ok {
-		fmt.Println("Couldn't env var $REPO")
-		return
+	// if root-argument was not supplied, return an error
+	if root == "" {
+		log.Fatalf("-root was not specified")
 	}
+
+	err := iterate(root)
+
+	if err != nil {
+		log.Fatalf("error while pulling repository %s: ", err)
+	}
+}
+
+// Iterate updates all repositories contained in "root"
+func iterate(root string) error {
+
+	type result struct {
+		repo    string
+		commits []string
+	}
+
+	var results []result
 
 	dirs, err := ioutil.ReadDir(root)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return errors.Wrap(err, "read failed")
 	}
 
 	var wg sync.WaitGroup
-	var results []git.PullResult
+	var commits []string
 	for _, dir := range dirs {
 
-		absDir := filepath.Join(root, dir.Name())
-		repo, err := git.New(absDir)
-
-		// if err != nil then the path is not a valid git repo.
-		if err != nil {
+		repo := filepath.Join(root, dir.Name())
+		if !git.IsValidRepo(repo) {
 			continue
 		}
-
 		// update repo
 		wg.Add(1)
-		go func() {
+		go func(repo string) {
 			defer wg.Done()
-			result := repo.Pull()
+			commits, _ = git.Pull(repo)
 
-			if len(result.Commits) > 0 {
-				results = append(results, result)
+			if len(commits) > 0 {
+				results = append(results, result{dir.Name(), commits})
 			}
-		}()
+		}(repo)
 	}
 
+	// wait for all goroutines to finish
 	wg.Wait()
 
-	// Output results
-	for _, res := range results {
-		fmt.Println(res.Repo)   // print repo-name
-		printSlice(res.Commits) // print unmerged commits
-	}
-
-}
-
-func printSlice(s []string) {
-	for _, e := range s {
-		if e != "" {
-			fmt.Println("- ", e)
+	// print changes
+	for _, r := range results {
+		fmt.Println(r.repo) // print repo-name
+		for _, c := range r.commits {
+			fmt.Printf("* %s\n", c)
 		}
 	}
+	return nil
 }
